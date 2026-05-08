@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, onValue, set, push, update, remove } from "firebase/database";
+import { getDatabase, ref, onValue, set, update, remove } from "firebase/database";
 
 // ══════════════════════════════════════════
 //  FIREBASE CONFIG
@@ -14,7 +14,6 @@ const firebaseConfig = {
   messagingSenderId: "759982751295",
   appId: "1:759982751295:web:cb806baf4bd59c03afc28a",
 };
-
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getDatabase(firebaseApp);
 
@@ -22,7 +21,6 @@ const db = getDatabase(firebaseApp);
 //  CONFIG
 // ══════════════════════════════════════════
 const ADMIN_PIN = "1234";
-const RIDER_PIN = "5678";
 
 const DEFAULT_PRODUCTS = [
   { id: "p1", name: "เสื้อยืด",  price: 250, visible: true },
@@ -42,32 +40,30 @@ const SOURCE = {
   comment:  { label: "Comment",   icon: "💬", color: "#1877F2" },
   messenger:{ label: "Messenger", icon: "✉️", color: "#A855F7" },
 };
-
-const NOTE_PRESETS = [
-  "โอนเงินแล้ว","ชำระปลายทาง","ที่อยู่พิเศษ","แพ็คของขวัญ","แนบสลิป","รอยืนยัน",
-];
+const NOTE_PRESETS = ["โอนเงินแล้ว","ชำระปลายทาง","ที่อยู่พิเศษ","แพ็คของขวัญ","แนบสลิป","รอยืนยัน"];
 const REASON_PRESETS = {
   waiting:  ["รอลูกค้ายืนยัน","รอชำระเงิน","รอสต็อกสินค้า"],
-  shipping: ["ส่ง EMS","ส่ง Kerry","ส่ง Flash","ส่งไปรษณีย์ลงทะเบียน","ไรเดอร์รับแล้ว"],
+  shipping: ["ส่ง EMS","ส่ง Kerry","ส่ง Flash","ไรเดอร์รับแล้ว"],
   done:     ["ลูกค้ารับของแล้ว","ยืนยันการรับสินค้า","รีวิวแล้ว"],
   cancelled:["ลูกค้ายกเลิก","ของหมด","ที่อยู่ไม่ถูกต้อง","ชำระไม่ผ่าน","ลูกค้าไม่รับสาย"],
 };
 
-const genId = () => "ORD" + String(Math.floor(Math.random() * 90000) + 10000);
+const genId = (prefix="ORD") => prefix + String(Math.floor(Math.random()*90000+10000));
 const fmt = iso => {
   const d = new Date(iso);
-  return d.toLocaleDateString("th-TH",{day:"numeric",month:"short"}) + " " +
+  return d.toLocaleDateString("th-TH",{day:"numeric",month:"short"})+" "+
          d.toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit"});
 };
-const baht = n => "฿" + Number(n).toLocaleString("th-TH");
+const baht = n => "฿"+Number(n).toLocaleString("th-TH");
 
 // ══════════════════════════════════════════
 //  ROOT APP
 // ══════════════════════════════════════════
 export default function App() {
-  const [role,     setRole]     = useState(null);
+  const [role,     setRole]     = useState(null); // null | "admin" | riderObj
   const [orders,   setOrders]   = useState([]);
   const [products, setProducts] = useState(DEFAULT_PRODUCTS);
+  const [riders,   setRiders]   = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [view,     setView]     = useState("list");
   const [selected, setSelected] = useState(null);
@@ -75,123 +71,132 @@ export default function App() {
   const [notify,   setNotify]   = useState(null);
   const [syncDot,  setSyncDot]  = useState(false);
 
-  // ── Firebase realtime listeners ──
   useEffect(() => {
-    const ordersRef    = ref(db, "orders");
-    const productsRef  = ref(db, "products");
-
-    const unsubOrders = onValue(ordersRef, snap => {
+    const unsubs = [];
+    unsubs.push(onValue(ref(db,"orders"), snap => {
       const val = snap.val();
-      const list = val ? Object.entries(val).map(([k,v])=>({...v, _key:k})) : [];
-      list.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+      const list = val ? Object.values(val) : [];
+      list.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
       setOrders(list);
-      // keep selected in sync
-      setSelected(s => s ? (list.find(o=>o.id===s.id) || s) : null);
+      setSelected(s => s ? (list.find(o=>o.id===s.id)||s) : null);
       setLoading(false);
-      setSyncDot(true); setTimeout(()=>setSyncDot(false), 800);
-    });
-
-    const unsubProducts = onValue(productsRef, snap => {
+      setSyncDot(true); setTimeout(()=>setSyncDot(false),800);
+    }));
+    unsubs.push(onValue(ref(db,"products"), snap => {
       const val = snap.val();
-      if (val) {
-        const list = Object.entries(val).map(([k,v])=>({...v, _key:k}));
-        setProducts(list);
-      } else {
-        // first time: seed default products
-        DEFAULT_PRODUCTS.forEach(p => set(ref(db, `products/${p.id}`), p));
-      }
-    });
-
-    return () => { unsubOrders(); unsubProducts(); };
+      if (val) setProducts(Object.values(val));
+      else DEFAULT_PRODUCTS.forEach(p=>set(ref(db,`products/${p.id}`),p));
+    }));
+    unsubs.push(onValue(ref(db,"riders"), snap => {
+      const val = snap.val();
+      setRiders(val ? Object.values(val) : []);
+      setLoading(false);
+    }));
+    return () => unsubs.forEach(u=>u());
   }, []);
 
-  const toast = msg => { setNotify(msg); setTimeout(()=>setNotify(null), 2500); };
+  const toast = msg => { setNotify(msg); setTimeout(()=>setNotify(null),2500); };
 
-  // ── order actions (write to Firebase) ──
   async function addOrder(order) {
-    await set(ref(db, `orders/${order.id}`), order);
-    setView("list");
-    toast("✅ เพิ่มออร์เดอร์แล้ว!");
+    await set(ref(db,`orders/${order.id}`),order);
+    setView("list"); toast("✅ เพิ่มออร์เดอร์แล้ว!");
   }
-
   async function updateStatus(id, status, reason="") {
     const now = new Date().toISOString();
-    const order = orders.find(o=>o.id===id);
-    if (!order) return;
-    const log = [...(order.statusLog||[]), { status, reason, at: now }];
-    await update(ref(db, `orders/${id}`), { status, reason, updatedAt: now, statusLog: log });
+    const order = orders.find(o=>o.id===id); if (!order) return;
+    const log = [...(order.statusLog||[]),{status,reason,at:now}];
+    await update(ref(db,`orders/${id}`),{status,reason,updatedAt:now,statusLog:log});
     toast("✅ อัปเดตสถานะแล้ว");
   }
-
-  async function updateRiderNote(id, riderNote) {
-    await update(ref(db, `orders/${id}`), { riderNote });
+  async function assignRider(orderId, rider) {
+    await update(ref(db,`orders/${orderId}`),{assignedRider: rider||null});
+    toast(rider ? `🛵 มอบหมายให้ ${rider.name} แล้ว` : "ยกเลิกการมอบหมาย");
   }
-
+  async function updateRiderNote(id, riderNote) {
+    await update(ref(db,`orders/${id}`),{riderNote});
+  }
   async function deleteOrder(id) {
-    await remove(ref(db, `orders/${id}`));
+    await remove(ref(db,`orders/${id}`));
     setView("list"); toast("🗑️ ลบออร์เดอร์แล้ว");
   }
-
-  // ── product actions ──
-  async function saveProducts(newProducts) {
-    // write each product keyed by id
+  async function saveProducts(list) {
     const updates = {};
-    newProducts.forEach(p => { updates[`products/${p.id}`] = p; });
-    // remove deleted ones
-    products.forEach(p => { if (!newProducts.find(x=>x.id===p.id)) updates[`products/${p.id}`] = null; });
-    await update(ref(db), updates);
+    list.forEach(p=>{updates[`products/${p.id}`]=p;});
+    products.forEach(p=>{if(!list.find(x=>x.id===p.id))updates[`products/${p.id}`]=null;});
+    await update(ref(db),updates);
     toast("💾 บันทึกสินค้าแล้ว");
   }
+  async function saveRider(rider) {
+    await set(ref(db,`riders/${rider.id}`),rider);
+    toast(rider.isNew ? "✅ เพิ่มไรเดอร์แล้ว" : "✏️ แก้ไขไรเดอร์แล้ว");
+  }
+  async function deleteRider(id) {
+    await remove(ref(db,`riders/${id}`));
+    toast("🗑️ ลบไรเดอร์แล้ว");
+  }
 
-  const filtered = filter==="all" ? orders : orders.filter(o=>o.status===filter);
+  const isRider = role && typeof role === "object";
+  const myOrders = isRider ? orders.filter(o=>o.assignedRider?.id===role.id) : [];
+  const filtered = filter==="all" ? orders
+    : filter==="mine" && isRider ? myOrders
+    : orders.filter(o=>o.status===filter);
   const counts = {waiting:0,shipping:0,done:0,cancelled:0};
-  orders.forEach(o => { if(counts[o.status]!==undefined) counts[o.status]++; });
+  orders.forEach(o=>{if(counts[o.status]!==undefined)counts[o.status]++;});
 
   if (loading) return <LoadingScreen/>;
-  if (!role)   return <LoginScreen onLogin={setRole}/>;
+  if (!role)   return <LoginScreen onLogin={setRole} riders={riders}/>;
 
   const viewTitle = {
     add:"➕ เพิ่มออร์เดอร์", detail:`ออร์เดอร์ ${selected?.id}`,
-    finance:"💰 การเงิน", products:"🗂️ จัดการสินค้า",
-  }[view] || (role==="rider" ? "🛵 หน้าไรเดอร์" : "📦 ออร์เดอร์");
+    finance:"💰 การเงิน", products:"🗂️ จัดการสินค้า", riders:"🛵 จัดการไรเดอร์",
+  }[view] || (isRider ? `🛵 ${role.name}` : "📦 ออร์เดอร์");
 
   return (
     <div style={S.root}>
-      <Glow/>
-      <style>{CSS}</style>
+      <Glow/><style>{CSS}</style>
       {notify && <Toast msg={notify}/>}
 
-      {/* HEADER */}
       <header style={S.header}>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           {view!=="list" && <button onClick={()=>setView("list")} style={S.backBtn}>←</button>}
           <div>
             <div style={{display:"flex",alignItems:"center",gap:6}}>
               <span style={{fontSize:17,fontWeight:700}}>{viewTitle}</span>
-              {syncDot && <span style={{width:6,height:6,borderRadius:"50%",background:"#10B981",display:"inline-block"}}/>}
+              {syncDot&&<span style={{width:6,height:6,borderRadius:"50%",background:"#10B981",display:"inline-block"}}/>}
             </div>
-            {view==="list" && (
+            {view==="list"&&(
               <div style={{fontSize:11,color:"#6060A0",marginTop:1}}>
-                <span style={{color:role==="admin"?"#1877F2":"#F59E0B",fontWeight:600}}>
-                  {role==="admin"?"👑 Admin":"🛵 Rider"}
-                </span>{" · "}{orders.length} รายการ{" · "}
+                <span style={{color:isRider?"#F59E0B":"#1877F2",fontWeight:600}}>
+                  {isRider?`🛵 ${role.name}`:"👑 Admin"}
+                </span>{" · "}{isRider ? `${myOrders.length} ออร์เดอร์ของฉัน` : `${orders.length} รายการ`}{" · "}
                 <span style={{color:"#10B981"}}>🔴 Live</span>
               </div>
             )}
           </div>
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
-          {view==="list" && role==="admin" && <>
+          {view==="list"&&!isRider&&<>
             <button onClick={()=>setView("finance")}  style={S.iconBtn}>💰</button>
             <button onClick={()=>setView("products")} style={S.iconBtn}>🗂️</button>
+            <button onClick={()=>setView("riders")}   style={S.iconBtn}>🛵</button>
             <button onClick={()=>setView("add")}      style={S.addBtn}>+ เพิ่ม</button>
           </>}
-          <button onClick={()=>{setRole(null);setView("list");}} style={S.iconBtn}>🚪</button>
+          {view==="list"&&isRider&&(
+            <button onClick={()=>setFilter(f=>f==="mine"?"all":"mine")} style={{
+              ...S.iconBtn,fontSize:12,fontWeight:600,padding:"8px 12px",
+              background:filter==="mine"?"#F59E0B22":"#1E1E35",
+              border:filter==="mine"?"1.5px solid #F59E0B44":"none",
+              color:filter==="mine"?"#F59E0B":"#A0A0C0",
+            }}>
+              {filter==="mine"?"📋 ของฉัน":"📋 ทั้งหมด"}
+            </button>
+          )}
+          <button onClick={()=>{setRole(null);setView("list");setFilter("all");}} style={S.iconBtn}>🚪</button>
         </div>
       </header>
 
       <div style={S.body}>
-        {view==="list" && <>
+        {view==="list"&&<>
           <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:16}}>
             {Object.entries(counts).map(([k,v])=>(
               <div key={k} onClick={()=>setFilter(filter===k?"all":k)} style={{
@@ -204,9 +209,9 @@ export default function App() {
               </div>
             ))}
           </div>
-          {filter!=="all" && (
+          {filter!=="all"&&filter!=="mine"&&(
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-              <span style={{fontSize:13,color:STATUS[filter].color}}>{STATUS[filter].icon} {STATUS[filter].label}</span>
+              <span style={{fontSize:13,color:STATUS[filter]?.color}}>{STATUS[filter]?.icon} {STATUS[filter]?.label}</span>
               <button onClick={()=>setFilter("all")} style={S.clearBtn}>ล้าง ✕</button>
             </div>
           )}
@@ -216,44 +221,234 @@ export default function App() {
           ))}
         </>}
 
-        {view==="add" && role==="admin" &&
-          <AddView products={products} onAdd={addOrder}/>}
+        {view==="add"&&!isRider&&
+          <AddView products={products} riders={riders} onAdd={addOrder}/>}
 
-        {view==="detail" && selected &&
-          <DetailView order={selected} role={role}
-            onStatusChange={updateStatus} onRiderNote={updateRiderNote}
+        {view==="detail"&&selected&&
+          <DetailView order={selected} role={role} isRider={isRider}
+            riders={riders}
+            onStatusChange={updateStatus}
+            onAssignRider={assignRider}
+            onRiderNote={updateRiderNote}
             onDelete={deleteOrder} toast={toast}/>}
 
-        {view==="finance" && role==="admin" &&
+        {view==="finance"&&!isRider&&
           <FinanceView orders={orders}/>}
 
-        {view==="products" && role==="admin" &&
+        {view==="products"&&!isRider&&
           <ProductsView products={products} saveProducts={saveProducts} toast={toast}/>}
+
+        {view==="riders"&&!isRider&&
+          <RidersView riders={riders} saveRider={saveRider} deleteRider={deleteRider} toast={toast}/>}
       </div>
     </div>
   );
 }
 
 // ══════════════════════════════════════════
-//  LOADING SCREEN
+//  RIDERS VIEW — admin manage riders
 // ══════════════════════════════════════════
-function LoadingScreen() {
+function RidersView({ riders, saveRider, deleteRider, toast }) {
+  const [editing, setEditing] = useState(null); // null | "new" | riderObj
+  const [form, setForm] = useState({name:"", pin:""});
+  const [showPin, setShowPin] = useState({});
+
+  function startNew()  { setEditing("new"); setForm({name:"", pin:""}); }
+  function startEdit(r){ setEditing(r); setForm({name:r.name, pin:r.pin}); }
+
+  function save() {
+    if (!form.name.trim() || form.pin.length !== 4) return;
+    // check duplicate PIN
+    const dupPin = riders.find(r =>
+      r.pin === form.pin && (editing==="new" || r.id !== editing.id)
+    );
+    if (dupPin) { toast("⚠️ PIN นี้ถูกใช้แล้ว กรุณาใช้ PIN อื่น"); return; }
+    const rider = {
+      id:   editing==="new" ? genId("RDR") : editing.id,
+      name: form.name.trim(),
+      pin:  form.pin,
+      isNew: editing==="new",
+    };
+    saveRider(rider);
+    setEditing(null);
+  }
+
   return (
-    <div style={{...S.root,display:"flex",flexDirection:"column",
-      alignItems:"center",justifyContent:"center",minHeight:"100vh"}}>
-      <style>{CSS}</style>
-      <Glow/>
-      <div style={{fontSize:52,marginBottom:16,animation:"pulse 1.2s ease infinite"}}>📦</div>
-      <div style={{fontSize:16,fontWeight:600,color:"#F0F0FF",marginBottom:8}}>กำลังเชื่อมต่อ...</div>
-      <div style={{fontSize:13,color:"#6060A0"}}>Firebase Realtime Database</div>
-      <div style={{display:"flex",gap:6,marginTop:20}}>
-        {[0,1,2].map(i=>(
-          <div key={i} style={{
-            width:8,height:8,borderRadius:"50%",background:"#1877F2",
-            animation:`bounce 0.8s ease ${i*0.15}s infinite`,
-          }}/>
-        ))}
-      </div>
+    <div style={{animation:"slideUp 0.25s ease"}}>
+      <button onClick={startNew} style={{
+        ...S.primaryBtn,
+        background:"linear-gradient(135deg,#F59E0B,#D97706)",
+        marginBottom:16,
+      }}>+ เพิ่มไรเดอร์ใหม่</button>
+
+      {/* edit/add form */}
+      {editing && (
+        <div style={{...S.card,marginBottom:16,border:"1.5px solid #F59E0B"}}>
+          <div style={{fontSize:13,color:"#8080A0",marginBottom:12,fontWeight:600}}>
+            {editing==="new" ? "➕ ไรเดอร์ใหม่" : `✏️ แก้ไข — ${editing.name}`}
+          </div>
+          <Field label="ชื่อไรเดอร์">
+            <input placeholder="เช่น สมชาย" value={form.name}
+              onChange={e=>setForm(f=>({...f,name:e.target.value}))}/>
+          </Field>
+          <Field label="PIN 4 หลัก">
+            <div style={{position:"relative"}}>
+              <input
+                type={showPin.form ? "text" : "password"}
+                placeholder="ตั้ง PIN 4 หลัก"
+                maxLength={4}
+                inputMode="numeric"
+                value={form.pin}
+                onChange={e=>setForm(f=>({...f,pin:e.target.value.replace(/\D/g,"").slice(0,4)}))}
+              />
+              <button onClick={()=>setShowPin(s=>({...s,form:!s.form}))} style={{
+                position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",
+                background:"none",border:"none",color:"#8080A0",cursor:"pointer",fontSize:16,
+              }}>{showPin.form ? "🙈" : "👁️"}</button>
+            </div>
+          </Field>
+          <div style={{display:"flex",gap:8,marginTop:4}}>
+            <button onClick={save}
+              disabled={!form.name.trim()||form.pin.length!==4}
+              style={{
+                ...S.primaryBtn,flex:1,padding:"12px",
+                background:(!form.name.trim()||form.pin.length!==4)?"#2E2E50":"#F59E0B",
+                color:(!form.name.trim()||form.pin.length!==4)?"#404060":"#fff",
+              }}>บันทึก</button>
+            <button onClick={()=>setEditing(null)}
+              style={{...S.primaryBtn,flex:1,background:"#2E2E50",padding:"12px"}}>ยกเลิก</button>
+          </div>
+        </div>
+      )}
+
+      {/* rider list */}
+      {riders.length===0 ? (
+        <div style={{textAlign:"center",marginTop:40,color:"#404060",fontSize:14}}>
+          ยังไม่มีไรเดอร์ กด "+ เพิ่มไรเดอร์ใหม่"
+        </div>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {riders.map(r=>(
+            <div key={r.id} style={{
+              ...S.card,marginBottom:0,
+              display:"flex",alignItems:"center",gap:12,
+            }}>
+              <div style={{
+                width:42,height:42,borderRadius:"50%",flexShrink:0,
+                background:"linear-gradient(135deg,#F59E0B,#D97706)",
+                display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:20,fontWeight:700,color:"#fff",
+              }}>
+                {r.name.charAt(0)}
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:15,fontWeight:700}}>{r.name}</div>
+                <div style={{fontSize:12,color:"#6060A0",marginTop:2,display:"flex",alignItems:"center",gap:6}}>
+                  PIN:
+                  <span style={{
+                    fontFamily:"monospace",letterSpacing:3,
+                    color:showPin[r.id]?"#F59E0B":"#404060",
+                  }}>
+                    {showPin[r.id] ? r.pin : "••••"}
+                  </span>
+                  <button onClick={()=>setShowPin(s=>({...s,[r.id]:!s[r.id]}))} style={{
+                    background:"none",border:"none",color:"#6060A0",
+                    cursor:"pointer",fontSize:13,padding:0,
+                  }}>{showPin[r.id]?"🙈":"👁️"}</button>
+                </div>
+              </div>
+              <div style={{display:"flex",gap:6,flexShrink:0}}>
+                <button onClick={()=>startEdit(r)} style={{
+                  background:"#1E1E35",border:"1.5px solid #2E2E50",color:"#A0A0C0",
+                  borderRadius:8,padding:"7px 11px",cursor:"pointer",fontSize:14,
+                }}>✏️</button>
+                <button onClick={()=>deleteRider(r.id)} style={{
+                  background:"transparent",border:"1.5px solid #FF444444",color:"#FF6060",
+                  borderRadius:8,padding:"7px 11px",cursor:"pointer",fontSize:14,
+                }}>🗑️</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════
+//  RIDER SELECTOR component
+// ══════════════════════════════════════════
+function RiderSelector({ riders, value, onChange, label="🛵 มอบหมายไรเดอร์" }) {
+  const [open, setOpen] = useState(false);
+  const selected = riders.find(r=>r.id===value?.id);
+
+  return (
+    <div style={{marginBottom:14,position:"relative",zIndex:30}}>
+      {label&&<div style={S.fieldLabel}>{label}</div>}
+      <button onClick={()=>setOpen(v=>!v)} style={{
+        width:"100%",background:"#12122080",
+        border:`1.5px solid ${open?"#F59E0B":"#2E2E50"}`,
+        borderRadius:10,padding:"12px 14px",
+        color:"#C0C0E0",fontSize:14,fontFamily:"inherit",
+        display:"flex",justifyContent:"space-between",alignItems:"center",
+        cursor:"pointer",transition:"border-color 0.2s",
+      }}>
+        <span>
+          {selected
+            ? <span style={{color:"#F59E0B",fontWeight:600}}>🛵 {selected.name}</span>
+            : <span style={{color:"#6060A0"}}>ยังไม่ได้มอบหมาย...</span>}
+        </span>
+        <span style={{fontSize:13,color:"#6060A0",display:"inline-block",
+          transform:open?"rotate(180deg)":"rotate(0deg)",transition:"transform 0.2s"}}>▾</span>
+      </button>
+
+      {open && (
+        <div style={{
+          position:"absolute",top:"calc(100% + 6px)",left:0,right:0,
+          background:"#1A1A2E",border:"1.5px solid #2E2E50",
+          borderRadius:12,overflow:"hidden",zIndex:50,
+          boxShadow:"0 8px 32px #000A",animation:"slideUp 0.15s ease",
+        }}>
+          {/* ไม่มอบหมาย */}
+          <button onClick={()=>{onChange(null);setOpen(false);}} style={{
+            width:"100%",background:"transparent",border:"none",
+            borderBottom:"1px solid #2E2E3888",padding:"13px 16px",
+            display:"flex",alignItems:"center",gap:10,
+            cursor:"pointer",fontFamily:"inherit",
+          }}>
+            <span style={{fontSize:20}}>🚫</span>
+            <span style={{fontSize:14,color:"#8080A0"}}>ไม่มอบหมาย</span>
+          </button>
+          {riders.length===0 && (
+            <div style={{padding:"14px 16px",fontSize:13,color:"#404060",textAlign:"center"}}>
+              ยังไม่มีไรเดอร์ — ไปเพิ่มที่หน้า 🛵 ก่อนครับ
+            </div>
+          )}
+          {riders.map(r=>{
+            const isSelected = value?.id===r.id;
+            return (
+              <button key={r.id} onClick={()=>{onChange(r);setOpen(false);}} style={{
+                width:"100%",
+                background:isSelected?"#F59E0B22":"transparent",
+                border:"none",borderBottom:"1px solid #2E2E3888",
+                padding:"13px 16px",
+                display:"flex",alignItems:"center",gap:10,
+                cursor:"pointer",fontFamily:"inherit",
+              }}>
+                <div style={{
+                  width:34,height:34,borderRadius:"50%",flexShrink:0,
+                  background:"linear-gradient(135deg,#F59E0B,#D97706)",
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  fontSize:16,fontWeight:700,color:"#fff",
+                }}>{r.name.charAt(0)}</div>
+                <span style={{fontSize:14,fontWeight:isSelected?700:400,
+                  color:isSelected?"#F59E0B":"#C0C0E0"}}>{r.name}</span>
+                {isSelected&&<span style={{marginLeft:"auto",color:"#F59E0B"}}>✓</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -261,23 +456,24 @@ function LoadingScreen() {
 // ══════════════════════════════════════════
 //  ADD ORDER VIEW
 // ══════════════════════════════════════════
-function AddView({ products, onAdd }) {
+function AddView({ products, riders, onAdd }) {
   const [name,        setName]        = useState("");
   const [source,      setSource]      = useState("comment");
   const [note,        setNote]        = useState("");
   const [cart,        setCart]        = useState({});
   const [shippingFee, setShippingFee] = useState(0);
+  const [assignedRider, setAssignedRider] = useState(null);
 
   function setQty(pid, qty) {
-    setCart(c => { const n={...c}; if(qty<=0) delete n[pid]; else n[pid]=qty; return n; });
+    setCart(c=>{ const n={...c}; if(qty<=0) delete n[pid]; else n[pid]=qty; return n; });
   }
 
   const visibleProducts = products.filter(p=>p.visible!==false);
   const cartItems = visibleProducts
     .filter(p=>cart[p.id])
     .map(p=>({...p,qty:cart[p.id],subtotal:p.price*cart[p.id]}));
-  const totalPrice = cartItems.reduce((s,i)=>s+i.subtotal,0) + Number(shippingFee||0);
-  const canSave = name.trim() && cartItems.length>0;
+  const totalPrice = cartItems.reduce((s,i)=>s+i.subtotal,0)+Number(shippingFee||0);
+  const canSave = name.trim()&&cartItems.length>0;
 
   function handleAdd() {
     if (!canSave) return;
@@ -286,6 +482,7 @@ function AddView({ products, onAdd }) {
       status:"waiting", createdAt:new Date().toISOString(),
       riderNote:"", updatedAt:null, statusLog:[],
       cartItems, shippingFee:Number(shippingFee||0), totalPrice, paid:false,
+      assignedRider: assignedRider||null,
     });
   }
 
@@ -342,13 +539,15 @@ function AddView({ products, onAdd }) {
         </div>
       )}
 
+      <RiderSelector riders={riders} value={assignedRider} onChange={setAssignedRider}/>
+
       <SmartNote label="หมายเหตุ (ไม่บังคับ)" value={note} onChange={setNote}
         presets={NOTE_PRESETS} placeholder="เช่น โอนแล้ว, ที่อยู่พิเศษ..."/>
 
       <button onClick={handleAdd} disabled={!canSave} style={{
-        ...S.primaryBtn,
+        ...S.primaryBtn,marginTop:8,
         background:canSave?"linear-gradient(135deg,#1877F2,#A855F7)":"#2E2E50",
-        color:canSave?"#fff":"#404060", marginTop:8,
+        color:canSave?"#fff":"#404060",
       }}>บันทึกออร์เดอร์</button>
     </div>
   );
@@ -357,7 +556,7 @@ function AddView({ products, onAdd }) {
 // ══════════════════════════════════════════
 //  DETAIL VIEW
 // ══════════════════════════════════════════
-function DetailView({ order, role, onStatusChange, onRiderNote, onDelete, toast }) {
+function DetailView({ order, role, isRider, riders, onStatusChange, onAssignRider, onRiderNote, onDelete, toast }) {
   const [riderNote,     setRiderNote]     = useState(order.riderNote||"");
   const [saved,         setSaved]         = useState(false);
   const [showItems,     setShowItems]     = useState(true);
@@ -366,7 +565,6 @@ function DetailView({ order, role, onStatusChange, onRiderNote, onDelete, toast 
   const [pendingStatus, setPendingStatus] = useState("");
   const [reason,        setReason]        = useState("");
 
-  // sync riderNote if order updates from firebase
   useEffect(()=>{ setRiderNote(order.riderNote||""); },[order.riderNote]);
 
   const riderAllowed = {shipping:true,done:true,cancelled:true};
@@ -387,6 +585,7 @@ function DetailView({ order, role, onStatusChange, onRiderNote, onDelete, toast 
 
   return (
     <div style={{animation:"slideUp 0.25s ease"}}>
+      {/* info card */}
       <div style={S.card}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
           <span style={{fontSize:12,color:"#6060A0"}}>{fmt(order.createdAt)}</span>
@@ -410,7 +609,7 @@ function DetailView({ order, role, onStatusChange, onRiderNote, onDelete, toast 
             transform:showItems?"rotate(180deg)":"rotate(0deg)",transition:"transform 0.2s"}}>▾</span>
         </button>
 
-        {showItems && (
+        {showItems&&(
           <div style={{background:"#12122060",borderRadius:10,padding:"12px",marginBottom:12}}>
             {(order.cartItems||[]).map((it,i)=>(
               <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:14,lineHeight:2,color:"#C0C0E0"}}>
@@ -422,7 +621,7 @@ function DetailView({ order, role, onStatusChange, onRiderNote, onDelete, toast 
         )}
 
         <div style={{borderTop:"1px solid #2E2E50",paddingTop:12}}>
-          {order.shippingFee>0 && (
+          {order.shippingFee>0&&(
             <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:"#8080A0",marginBottom:4}}>
               <span>ค่าจัดส่ง</span><span>{baht(order.shippingFee)}</span>
             </div>
@@ -433,14 +632,46 @@ function DetailView({ order, role, onStatusChange, onRiderNote, onDelete, toast 
           </div>
         </div>
 
-        {order.note && <div style={{fontSize:13,color:"#F59E0B",marginTop:10}}>📝 {order.note}</div>}
-        {order.updatedAt && <div style={{fontSize:11,color:"#404060",marginTop:6}}>อัปเดต: {fmt(order.updatedAt)}</div>}
+        {order.note&&<div style={{fontSize:13,color:"#F59E0B",marginTop:10}}>📝 {order.note}</div>}
+        {order.updatedAt&&<div style={{fontSize:11,color:"#404060",marginTop:6}}>อัปเดต: {fmt(order.updatedAt)}</div>}
+      </div>
+
+      {/* ASSIGNED RIDER */}
+      <div style={S.card}>
+        <div style={{fontSize:13,color:"#8080A0",marginBottom:10,fontWeight:600}}>🛵 ไรเดอร์ที่รับผิดชอบ</div>
+        {!isRider ? (
+          <RiderSelector riders={riders} value={order.assignedRider}
+            onChange={r=>onAssignRider(order.id,r)} label=""/>
+        ) : (
+          <div style={{
+            display:"flex",alignItems:"center",gap:10,
+            background:order.assignedRider?"#F59E0B22":"#12122060",
+            borderRadius:10,padding:"12px 14px",
+          }}>
+            {order.assignedRider ? (
+              <>
+                <div style={{
+                  width:36,height:36,borderRadius:"50%",
+                  background:"linear-gradient(135deg,#F59E0B,#D97706)",
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  fontSize:18,fontWeight:700,color:"#fff",flexShrink:0,
+                }}>{order.assignedRider.name.charAt(0)}</div>
+                <div>
+                  <div style={{fontSize:14,fontWeight:700,color:"#F59E0B"}}>{order.assignedRider.name}</div>
+                  <div style={{fontSize:11,color:"#8080A0"}}>ไรเดอร์ที่รับผิดชอบ</div>
+                </div>
+              </>
+            ) : (
+              <span style={{fontSize:14,color:"#404060",fontStyle:"italic"}}>ยังไม่ได้มอบหมายไรเดอร์</span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* STATUS */}
       <div style={S.card}>
         <div style={{fontSize:13,color:"#8080A0",marginBottom:10,fontWeight:600}}>
-          {role==="rider"?"🛵 อัปเดตสถานะ":"🔄 เปลี่ยนสถานะ"}
+          {isRider?"🛵 อัปเดตสถานะ":"🔄 เปลี่ยนสถานะ"}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
           <span style={{fontSize:12,color:"#6060A0"}}>ปัจจุบัน:</span>
@@ -451,7 +682,7 @@ function DetailView({ order, role, onStatusChange, onRiderNote, onDelete, toast 
             borderRadius:8,padding:"4px 12px"}}>
             {STATUS[order.status].icon} {STATUS[order.status].label}
           </span>
-          {order.reason && <span style={{fontSize:12,color:"#8080A0",fontStyle:"italic"}}>— {order.reason}</span>}
+          {order.reason&&<span style={{fontSize:12,color:"#8080A0",fontStyle:"italic"}}>— {order.reason}</span>}
         </div>
 
         <div style={{position:"relative",zIndex:20}}>
@@ -461,14 +692,14 @@ function DetailView({ order, role, onStatusChange, onRiderNote, onDelete, toast 
             borderRadius:10,padding:"12px 14px",
             color:"#C0C0E0",fontSize:14,fontFamily:"inherit",
             display:"flex",justifyContent:"space-between",alignItems:"center",
-            cursor:"pointer",transition:"border-color 0.2s",
+            cursor:"pointer",
           }}>
             <span>{pendingStatus?STATUS[pendingStatus].icon+" "+STATUS[pendingStatus].label:"เลือกสถานะใหม่..."}</span>
             <span style={{fontSize:13,color:"#6060A0",display:"inline-block",
               transform:dropOpen?"rotate(180deg)":"rotate(0deg)",transition:"transform 0.2s"}}>▾</span>
           </button>
 
-          {dropOpen && (
+          {dropOpen&&(
             <div style={{
               position:"absolute",top:"calc(100% + 6px)",left:0,right:0,
               background:"#1A1A2E",border:"1.5px solid #2E2E50",
@@ -476,7 +707,7 @@ function DetailView({ order, role, onStatusChange, onRiderNote, onDelete, toast 
               boxShadow:"0 8px 32px #000A",animation:"slideUp 0.15s ease",
             }}>
               {Object.entries(STATUS).map(([k,v])=>{
-                const allowed=role==="admin"||riderAllowed[k];
+                const allowed=!isRider||riderAllowed[k];
                 const isCurrent=order.status===k;
                 return (
                   <button key={k} onClick={()=>{
@@ -489,7 +720,7 @@ function DetailView({ order, role, onStatusChange, onRiderNote, onDelete, toast 
                     padding:"13px 16px",
                     display:"flex",alignItems:"center",justifyContent:"space-between",
                     cursor:allowed&&!isCurrent?"pointer":"not-allowed",
-                    fontFamily:"inherit",transition:"background 0.15s",
+                    fontFamily:"inherit",
                   }}>
                     <span style={{fontSize:14,fontWeight:600,color:isCurrent?v.color:allowed?"#C0C0E0":"#2E2E50"}}>
                       {v.icon} {v.label}
@@ -503,10 +734,10 @@ function DetailView({ order, role, onStatusChange, onRiderNote, onDelete, toast 
           )}
         </div>
 
-        {pendingStatus && (
+        {pendingStatus&&(
           <div style={{marginTop:12,animation:"slideUp 0.15s ease"}}>
-            <SmartNote label="เหตุผล / หมายเหตุ (ไม่บังคับ)" value={reason} onChange={setReason}
-              presets={REASON_PRESETS[pendingStatus]||[]} placeholder="ระบุเหตุผลเพิ่มเติม..." compact/>
+            <SmartNote label="เหตุผล (ไม่บังคับ)" value={reason} onChange={setReason}
+              presets={REASON_PRESETS[pendingStatus]||[]} placeholder="ระบุเหตุผล..." compact/>
             <div style={{display:"flex",gap:8}}>
               <button onClick={confirmStatus} style={{
                 flex:1,padding:"12px",border:"none",borderRadius:10,
@@ -523,7 +754,7 @@ function DetailView({ order, role, onStatusChange, onRiderNote, onDelete, toast 
       </div>
 
       {/* LOG */}
-      {statusLog.length>0 && (
+      {statusLog.length>0&&(
         <div style={S.card}>
           <button onClick={()=>setShowLog(v=>!v)} style={{
             width:"100%",background:"none",border:"none",padding:0,
@@ -533,7 +764,7 @@ function DetailView({ order, role, onStatusChange, onRiderNote, onDelete, toast 
             <span style={{fontSize:14,color:"#6060A0",display:"inline-block",
               transform:showLog?"rotate(180deg)":"rotate(0deg)",transition:"transform 0.2s"}}>▾</span>
           </button>
-          {showLog && (
+          {showLog&&(
             <div style={{marginTop:12,animation:"slideUp 0.15s ease"}}>
               {[...statusLog].reverse().map((log,i)=>(
                 <div key={i} style={{
@@ -563,12 +794,12 @@ function DetailView({ order, role, onStatusChange, onRiderNote, onDelete, toast 
       )}
 
       {/* RIDER NOTE */}
-      <div style={{...S.card,marginBottom:role==="admin"?14:24}}>
+      <div style={{...S.card,marginBottom:!isRider?14:24}}>
         <div style={{fontSize:13,color:"#8080A0",marginBottom:8,fontWeight:600}}>
           🛵 หมายเหตุจากไรเดอร์
-          {role==="rider"&&<span style={{color:"#F59E0B",fontSize:11,marginLeft:6}}>(แก้ไขได้)</span>}
+          {isRider&&<span style={{color:"#F59E0B",fontSize:11,marginLeft:6}}>(แก้ไขได้)</span>}
         </div>
-        {role==="rider" ? (
+        {isRider ? (
           <div style={{display:"flex",gap:8}}>
             <input placeholder="เช่น ลูกค้าไม่รับสาย, ฝากไว้หน้าบ้าน..."
               value={riderNote} onChange={e=>setRiderNote(e.target.value)} style={{flex:1}}/>
@@ -588,7 +819,7 @@ function DetailView({ order, role, onStatusChange, onRiderNote, onDelete, toast 
         )}
       </div>
 
-      {role==="admin" && (
+      {!isRider&&(
         <button onClick={()=>onDelete(order.id)} style={S.dangerBtn}>🗑️ ลบออร์เดอร์นี้</button>
       )}
     </div>
@@ -601,7 +832,6 @@ function DetailView({ order, role, onStatusChange, onRiderNote, onDelete, toast 
 function FinanceView({ orders }) {
   const [period, setPeriod] = useState("all");
   const now = new Date();
-
   const filtered = orders.filter(o=>{
     if(period==="all")return true;
     const d=new Date(o.createdAt);
@@ -610,18 +840,15 @@ function FinanceView({ orders }) {
     if(period==="month")return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();
     return true;
   });
-
   const totalRevenue  = filtered.filter(o=>o.status!=="cancelled").reduce((s,o)=>s+(o.totalPrice||0),0);
   const doneRevenue   = filtered.filter(o=>o.status==="done").reduce((s,o)=>s+(o.totalPrice||0),0);
   const pendingAmount = filtered.filter(o=>o.status==="waiting"||o.status==="shipping").reduce((s,o)=>s+(o.totalPrice||0),0);
   const shippingTotal = filtered.filter(o=>o.status!=="cancelled").reduce((s,o)=>s+(o.shippingFee||0),0);
   const cancelledCount= filtered.filter(o=>o.status==="cancelled").length;
-
   const productMap={};
   filtered.forEach(o=>{(o.cartItems||[]).forEach(it=>{
     if(!productMap[it.name])productMap[it.name]={qty:0,rev:0};
-    productMap[it.name].qty+=it.qty;
-    productMap[it.name].rev+=it.subtotal;
+    productMap[it.name].qty+=it.qty; productMap[it.name].rev+=it.subtotal;
   });});
   const topProducts=Object.entries(productMap).sort((a,b)=>b[1].rev-a[1].rev).slice(0,5);
   const periods=[{k:"today",l:"วันนี้"},{k:"week",l:"7 วัน"},{k:"month",l:"เดือนนี้"},{k:"all",l:"ทั้งหมด"}];
@@ -639,13 +866,11 @@ function FinanceView({ orders }) {
           }}>{p.l}</button>
         ))}
       </div>
-
       <div style={{...S.card,textAlign:"center",marginBottom:14}}>
         <div style={{fontSize:13,color:"#8080A0",marginBottom:8}}>ยอดขายรวม</div>
         <div style={{fontSize:36,fontWeight:800,color:"#10B981",letterSpacing:-1}}>{baht(totalRevenue)}</div>
         <div style={{fontSize:12,color:"#6060A0",marginTop:4}}>{filtered.length} ออร์เดอร์</div>
       </div>
-
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
         {[
           {label:"ส่งสำเร็จ",   value:baht(doneRevenue),   color:"#10B981"},
@@ -660,8 +885,7 @@ function FinanceView({ orders }) {
           </div>
         ))}
       </div>
-
-      {topProducts.length>0 && (
+      {topProducts.length>0&&(
         <div style={S.card}>
           <div style={{fontSize:13,color:"#8080A0",marginBottom:12,fontWeight:600}}>🏆 สินค้าขายดี</div>
           {topProducts.map(([name,{qty,rev}],i)=>(
@@ -686,13 +910,12 @@ function FinanceView({ orders }) {
 }
 
 // ══════════════════════════════════════════
-//  PRODUCTS MANAGEMENT
+//  PRODUCTS VIEW
 // ══════════════════════════════════════════
 function ProductsView({ products, saveProducts, toast }) {
   const [editing, setEditing] = useState(null);
   const [form,    setForm]    = useState({name:"",price:""});
   const [local,   setLocal]   = useState(products);
-
   useEffect(()=>setLocal(products),[products]);
 
   function startEdit(p){setEditing(p);setForm({name:p.name,price:String(p.price)});}
@@ -701,104 +924,52 @@ function ProductsView({ products, saveProducts, toast }) {
   function save() {
     if(!form.name.trim()||!form.price)return;
     let next;
-    if(editing==="new"){
-      next=[...local,{id:"p"+Date.now(),name:form.name.trim(),price:Number(form.price),visible:true}];
-    } else {
-      next=local.map(x=>x.id===editing.id?{...x,name:form.name.trim(),price:Number(form.price)}:x);
-    }
+    if(editing==="new") next=[...local,{id:"p"+Date.now(),name:form.name.trim(),price:Number(form.price),visible:true}];
+    else next=local.map(x=>x.id===editing.id?{...x,name:form.name.trim(),price:Number(form.price)}:x);
     setLocal(next); saveProducts(next); setEditing(null);
   }
-
-  function del(id){
-    const next=local.filter(x=>x.id!==id);
-    setLocal(next); saveProducts(next); toast("🗑️ ลบสินค้าแล้ว");
-  }
-
-  function toggleVisible(id){
-    const next=local.map(x=>x.id===id?{...x,visible:!(x.visible!==false)}:x);
-    setLocal(next); saveProducts(next);
-  }
+  function del(id){const next=local.filter(x=>x.id!==id);setLocal(next);saveProducts(next);toast("🗑️ ลบสินค้าแล้ว");}
+  function toggleVisible(id){const next=local.map(x=>x.id===id?{...x,visible:!(x.visible!==false)}:x);setLocal(next);saveProducts(next);}
 
   const visibleCount=local.filter(p=>p.visible!==false).length;
   const allVisible=visibleCount===local.length;
-
-  function toggleAll(){
-    const next=!allVisible;
-    const updated=local.map(x=>({...x,visible:next}));
-    setLocal(updated); saveProducts(updated);
-    toast(next?"👁️ แสดงทั้งหมดแล้ว":"🙈 ซ่อนทั้งหมดแล้ว");
-  }
+  function toggleAll(){const next=!allVisible;const updated=local.map(x=>({...x,visible:next}));setLocal(updated);saveProducts(updated);toast(next?"👁️ แสดงทั้งหมด":"🙈 ซ่อนทั้งหมด");}
 
   return (
     <div style={{animation:"slideUp 0.25s ease"}}>
       <div style={{display:"flex",gap:8,marginBottom:16}}>
-        <button onClick={startNew} style={{
-          ...S.primaryBtn,flex:1,
-          background:"linear-gradient(135deg,#10B981,#059669)",
-          padding:"13px",fontSize:14,
-        }}>+ เพิ่มสินค้าใหม่</button>
-        <button onClick={toggleAll} style={{
-          background:"#1A1A2E",border:"1.5px solid #2E2E50",
-          borderRadius:12,padding:"0 16px",cursor:"pointer",
-          fontSize:13,color:"#A0A0C0",fontFamily:"inherit",whiteSpace:"nowrap",
-        }}>{allVisible?"🙈 ซ่อนทั้งหมด":"👁️ แสดงทั้งหมด"}</button>
+        <button onClick={startNew} style={{...S.primaryBtn,flex:1,background:"linear-gradient(135deg,#10B981,#059669)",padding:"13px",fontSize:14}}>+ เพิ่มสินค้าใหม่</button>
+        <button onClick={toggleAll} style={{background:"#1A1A2E",border:"1.5px solid #2E2E50",borderRadius:12,padding:"0 16px",cursor:"pointer",fontSize:13,color:"#A0A0C0",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+          {allVisible?"🙈 ซ่อนทั้งหมด":"👁️ แสดงทั้งหมด"}
+        </button>
       </div>
-
       <div style={{fontSize:12,color:"#6060A0",marginBottom:12,textAlign:"right"}}>
         แสดงอยู่ <span style={{color:"#1877F2",fontWeight:700}}>{visibleCount}</span> / {local.length} รายการ
       </div>
-
-      {editing && (
+      {editing&&(
         <div style={{...S.card,marginBottom:16,border:"1.5px solid #1877F2"}}>
-          <div style={{fontSize:13,color:"#8080A0",marginBottom:12,fontWeight:600}}>
-            {editing==="new"?"➕ สินค้าใหม่":"✏️ แก้ไขสินค้า"}
-          </div>
-          <Field label="ชื่อสินค้า">
-            <input placeholder="เช่น เสื้อยืด" value={form.name}
-              onChange={e=>setForm(f=>({...f,name:e.target.value}))}/>
-          </Field>
-          <Field label="ราคา (฿)">
-            <input type="number" inputMode="numeric" placeholder="0"
-              value={form.price} onChange={e=>setForm(f=>({...f,price:e.target.value}))}/>
-          </Field>
+          <div style={{fontSize:13,color:"#8080A0",marginBottom:12,fontWeight:600}}>{editing==="new"?"➕ สินค้าใหม่":"✏️ แก้ไขสินค้า"}</div>
+          <Field label="ชื่อสินค้า"><input placeholder="เช่น เสื้อยืด" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))}/></Field>
+          <Field label="ราคา (฿)"><input type="number" inputMode="numeric" placeholder="0" value={form.price} onChange={e=>setForm(f=>({...f,price:e.target.value}))}/></Field>
           <div style={{display:"flex",gap:8,marginTop:4}}>
             <button onClick={save} style={{...S.primaryBtn,flex:1,background:"#1877F2",padding:"12px"}}>บันทึก</button>
             <button onClick={()=>setEditing(null)} style={{...S.primaryBtn,flex:1,background:"#2E2E50",padding:"12px"}}>ยกเลิก</button>
           </div>
         </div>
       )}
-
       <div style={{display:"flex",flexDirection:"column",gap:8}}>
         {local.map(p=>{
           const isVisible=p.visible!==false;
           return (
-            <div key={p.id} style={{
-              ...S.card,marginBottom:0,
-              display:"flex",alignItems:"center",gap:12,
-              opacity:isVisible?1:0.45,transition:"opacity 0.2s",
-            }}>
-              <button onClick={()=>toggleVisible(p.id)} style={{
-                width:38,height:38,flexShrink:0,
-                background:isVisible?"#1877F222":"#1E1E35",
-                border:`1.5px solid ${isVisible?"#1877F255":"#2E2E50"}`,
-                borderRadius:10,cursor:"pointer",
-                display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,
-              }}>{isVisible?"👁️":"🙈"}</button>
+            <div key={p.id} style={{...S.card,marginBottom:0,display:"flex",alignItems:"center",gap:12,opacity:isVisible?1:0.45,transition:"opacity 0.2s"}}>
+              <button onClick={()=>toggleVisible(p.id)} style={{width:38,height:38,flexShrink:0,background:isVisible?"#1877F222":"#1E1E35",border:`1.5px solid ${isVisible?"#1877F255":"#2E2E50"}`,borderRadius:10,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>{isVisible?"👁️":"🙈"}</button>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:15,fontWeight:600,
-                  color:isVisible?"#F0F0FF":"#6060A0",
-                  textDecoration:isVisible?"none":"line-through"}}>{p.name}</div>
+                <div style={{fontSize:15,fontWeight:600,color:isVisible?"#F0F0FF":"#6060A0",textDecoration:isVisible?"none":"line-through"}}>{p.name}</div>
                 <div style={{fontSize:13,color:isVisible?"#F59E0B":"#505050",marginTop:2}}>{baht(p.price)}</div>
               </div>
               <div style={{display:"flex",gap:6,flexShrink:0}}>
-                <button onClick={()=>startEdit(p)} style={{
-                  background:"#1E1E35",border:"1.5px solid #2E2E50",color:"#A0A0C0",
-                  borderRadius:8,padding:"7px 11px",cursor:"pointer",fontSize:14,
-                }}>✏️</button>
-                <button onClick={()=>del(p.id)} style={{
-                  background:"transparent",border:"1.5px solid #FF444444",color:"#FF6060",
-                  borderRadius:8,padding:"7px 11px",cursor:"pointer",fontSize:14,
-                }}>🗑️</button>
+                <button onClick={()=>startEdit(p)} style={{background:"#1E1E35",border:"1.5px solid #2E2E50",color:"#A0A0C0",borderRadius:8,padding:"7px 11px",cursor:"pointer",fontSize:14}}>✏️</button>
+                <button onClick={()=>del(p.id)} style={{background:"transparent",border:"1.5px solid #FF444444",color:"#FF6060",borderRadius:8,padding:"7px 11px",cursor:"pointer",fontSize:14}}>🗑️</button>
               </div>
             </div>
           );
@@ -809,32 +980,32 @@ function ProductsView({ products, saveProducts, toast }) {
 }
 
 // ══════════════════════════════════════════
-//  LOGIN
+//  LOGIN SCREEN
 // ══════════════════════════════════════════
-function LoginScreen({ onLogin }) {
-  const [mode, setMode]   = useState(null);
-  const [pin,  setPin]    = useState("");
-  const [error,setError]  = useState("");
-  const [shake,setShake]  = useState(false);
+function LoginScreen({ onLogin, riders }) {
+  const [mode,  setMode]  = useState(null); // null | "admin" | "rider"
+  const [pin,   setPin]   = useState("");
+  const [error, setError] = useState("");
+  const [shake, setShake] = useState(false);
 
   function tap(d) {
     if(pin.length>=4)return;
     const next=pin+d; setPin(next); setError("");
     if(next.length===4){
-      const ok=mode==="admin"?ADMIN_PIN:RIDER_PIN;
-      if(next===ok){onLogin(mode);}
-      else{
-        setShake(true); setError("รหัสไม่ถูกต้อง ลองใหม่อีกครั้ง");
-        setTimeout(()=>{setShake(false);setPin("");},600);
+      if(mode==="admin"){
+        if(next===ADMIN_PIN) onLogin("admin");
+        else{ setShake(true); setError("รหัสไม่ถูกต้อง"); setTimeout(()=>{setShake(false);setPin("");},600); }
+      } else {
+        const rider = riders.find(r=>r.pin===next);
+        if(rider) onLogin(rider);
+        else{ setShake(true); setError("รหัสไม่ถูกต้อง"); setTimeout(()=>{setShake(false);setPin("");},600); }
       }
     }
   }
 
   return (
-    <div style={{...S.root,display:"flex",flexDirection:"column",
-      alignItems:"center",justifyContent:"center",padding:"32px 24px"}}>
-      <style>{CSS}</style>
-      <Glow/>
+    <div style={{...S.root,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"32px 24px"}}>
+      <style>{CSS}</style><Glow/>
       <div style={{fontSize:52,marginBottom:8}}>📦</div>
       <div style={{fontSize:22,fontWeight:700,marginBottom:4}}>ระบบออร์เดอร์</div>
       <div style={{fontSize:13,color:"#6060A0",marginBottom:32}}>Facebook · Messenger</div>
@@ -867,6 +1038,13 @@ function LoginScreen({ onLogin }) {
               <span style={{color:"#6060A0",fontWeight:400}}> — PIN 4 หลัก</span>
             </div>
           </div>
+          {mode==="rider"&&riders.length===0&&(
+            <div style={{textAlign:"center",color:"#F59E0B",fontSize:13,marginBottom:20,
+              background:"#F59E0B22",borderRadius:10,padding:"12px"}}>
+              ⚠️ ยังไม่มีไรเดอร์ในระบบ<br/>
+              <span style={{color:"#8080A0",fontSize:12}}>แอดมินต้องเพิ่มไรเดอร์ก่อน</span>
+            </div>
+          )}
           <div style={{display:"flex",justifyContent:"center",gap:18,marginBottom:12,
             animation:shake?"shake 0.4s ease":"none"}}>
             {[0,1,2,3].map(i=>(
@@ -902,19 +1080,28 @@ function LoginScreen({ onLogin }) {
 }
 
 // ══════════════════════════════════════════
-//  SMALL COMPONENTS
+//  LOADING SCREEN
 // ══════════════════════════════════════════
-function QtyControl({ qty, onChange }) {
+function LoadingScreen() {
   return (
-    <div style={{display:"flex",alignItems:"center"}}>
-      <button onClick={()=>onChange(qty-1)} style={S.qtyBtn}>−</button>
-      <span style={{minWidth:36,textAlign:"center",fontSize:16,fontWeight:700,
-        color:qty>0?"#F0F0FF":"#404060"}}>{qty||0}</span>
-      <button onClick={()=>onChange(qty+1)} style={{...S.qtyBtn,background:"#1877F222",borderColor:"#1877F244",color:"#1877F2"}}>+</button>
+    <div style={{...S.root,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:"100vh"}}>
+      <style>{CSS}</style><Glow/>
+      <div style={{fontSize:52,marginBottom:16,animation:"pulse 1.2s ease infinite"}}>📦</div>
+      <div style={{fontSize:16,fontWeight:600,marginBottom:8}}>กำลังเชื่อมต่อ...</div>
+      <div style={{fontSize:13,color:"#6060A0"}}>Firebase Realtime Database</div>
+      <div style={{display:"flex",gap:6,marginTop:20}}>
+        {[0,1,2].map(i=>(
+          <div key={i} style={{width:8,height:8,borderRadius:"50%",background:"#1877F2",
+            animation:`bounce 0.8s ease ${i*0.15}s infinite`}}/>
+        ))}
+      </div>
     </div>
   );
 }
 
+// ══════════════════════════════════════════
+//  SMALL COMPONENTS
+// ══════════════════════════════════════════
 function OrderCard({ order, index, onClick }) {
   return (
     <div className="order-card" onClick={onClick} style={{
@@ -936,11 +1123,17 @@ function OrderCard({ order, index, onClick }) {
           <div style={{fontSize:13,color:"#8080B0",marginBottom:4}}>
             {(order.cartItems||[]).map(i=>`${i.name}×${i.qty}`).join(", ")||order.items}
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
             <span style={{fontSize:13,fontWeight:700,color:"#10B981"}}>{baht(order.totalPrice||0)}</span>
             <span style={{fontSize:11,color:"#404060"}}>{fmt(order.createdAt)}</span>
+            {order.assignedRider&&(
+              <span style={{fontSize:11,color:"#F59E0B",background:"#F59E0B22",
+                borderRadius:6,padding:"1px 7px"}}>
+                🛵 {order.assignedRider.name}
+              </span>
+            )}
           </div>
-          {order.riderNote&&<div style={{fontSize:12,color:"#F59E0B",marginTop:4}}>🛵 {order.riderNote}</div>}
+          {order.riderNote&&<div style={{fontSize:12,color:"#F59E0B",marginTop:4}}>💬 {order.riderNote}</div>}
         </div>
         <div style={{fontSize:11,fontWeight:600,
           color:STATUS[order.status].color,
@@ -954,12 +1147,22 @@ function OrderCard({ order, index, onClick }) {
   );
 }
 
+function QtyControl({ qty, onChange }) {
+  return (
+    <div style={{display:"flex",alignItems:"center"}}>
+      <button onClick={()=>onChange(qty-1)} style={S.qtyBtn}>−</button>
+      <span style={{minWidth:36,textAlign:"center",fontSize:16,fontWeight:700,color:qty>0?"#F0F0FF":"#404060"}}>{qty||0}</span>
+      <button onClick={()=>onChange(qty+1)} style={{...S.qtyBtn,background:"#1877F222",borderColor:"#1877F244",color:"#1877F2"}}>+</button>
+    </div>
+  );
+}
+
 function SmartNote({ label, value, onChange, presets=[], placeholder="", compact=false }) {
   function togglePreset(p) {
     if(!value.trim()){onChange(p);return;}
     const parts=value.split(",").map(x=>x.trim()).filter(Boolean);
-    if(parts.includes(p)){onChange(parts.filter(x=>x!==p).join(", "));}
-    else{onChange(value.trimEnd()+(value.endsWith(",")?" ":",")+p);}
+    if(parts.includes(p)) onChange(parts.filter(x=>x!==p).join(", "));
+    else onChange(value.trimEnd()+(value.endsWith(",")?" ":",")+p);
   }
   function isActive(p){return value.split(",").map(x=>x.trim()).includes(p);}
   return (
@@ -976,8 +1179,7 @@ function SmartNote({ label, value, onChange, presets=[], placeholder="", compact
                 border:`1.5px solid ${active?"#1877F2":"#2E2E50"}`,
                 borderRadius:20,color:active?"#1877F2":"#8080A0",
                 fontSize:12,fontWeight:active?600:400,
-                cursor:"pointer",fontFamily:"inherit",
-                transition:"all 0.15s",whiteSpace:"nowrap",
+                cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",
               }}>
                 {active&&<span style={{marginRight:4}}>✓</span>}{p}
               </button>
@@ -1010,10 +1212,8 @@ function Field({ label, children }) {
 
 function Glow() {
   return <>
-    <div style={{position:"fixed",top:-80,right:-60,width:260,height:260,
-      background:"radial-gradient(circle,#1877F233 0%,transparent 70%)",pointerEvents:"none",zIndex:0}}/>
-    <div style={{position:"fixed",bottom:-60,left:-60,width:220,height:220,
-      background:"radial-gradient(circle,#A855F722 0%,transparent 70%)",pointerEvents:"none",zIndex:0}}/>
+    <div style={{position:"fixed",top:-80,right:-60,width:260,height:260,background:"radial-gradient(circle,#1877F233 0%,transparent 70%)",pointerEvents:"none",zIndex:0}}/>
+    <div style={{position:"fixed",bottom:-60,left:-60,width:220,height:220,background:"radial-gradient(circle,#A855F722 0%,transparent 70%)",pointerEvents:"none",zIndex:0}}/>
   </>;
 }
 
@@ -1025,18 +1225,18 @@ function Toast({ msg }) {
 }
 
 const S = {
-  root:    {fontFamily:"'Sarabun','Noto Sans Thai',sans-serif",background:"#0F0F1A",minHeight:"100vh",color:"#F0F0FF",maxWidth:430,margin:"0 auto",position:"relative"},
-  header:  {position:"sticky",top:0,zIndex:10,background:"rgba(15,15,26,0.95)",backdropFilter:"blur(12px)",borderBottom:"1px solid #1E1E35",padding:"14px 20px 10px",display:"flex",alignItems:"center",justifyContent:"space-between"},
-  body:    {padding:"16px 20px 100px",position:"relative",zIndex:1},
-  card:    {background:"#1A1A2E",border:"1.5px solid #2E2E50",borderRadius:14,padding:"16px",marginBottom:14},
-  backBtn: {background:"none",border:"none",color:"#A0A0C0",fontSize:22,cursor:"pointer",padding:"0 6px 0 0"},
-  iconBtn: {background:"#1E1E35",border:"none",color:"#A0A0C0",borderRadius:10,padding:"8px 12px",fontSize:18,cursor:"pointer"},
-  addBtn:  {background:"linear-gradient(135deg,#1877F2,#A855F7)",border:"none",color:"#fff",borderRadius:10,padding:"8px 16px",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:"inherit"},
-  clearBtn:{background:"none",border:"none",color:"#6060A0",fontSize:12,cursor:"pointer"},
+  root:      {fontFamily:"'Sarabun','Noto Sans Thai',sans-serif",background:"#0F0F1A",minHeight:"100vh",color:"#F0F0FF",maxWidth:430,margin:"0 auto",position:"relative"},
+  header:    {position:"sticky",top:0,zIndex:10,background:"rgba(15,15,26,0.95)",backdropFilter:"blur(12px)",borderBottom:"1px solid #1E1E35",padding:"14px 20px 10px",display:"flex",alignItems:"center",justifyContent:"space-between"},
+  body:      {padding:"16px 20px 100px",position:"relative",zIndex:1},
+  card:      {background:"#1A1A2E",border:"1.5px solid #2E2E50",borderRadius:14,padding:"16px",marginBottom:14},
+  backBtn:   {background:"none",border:"none",color:"#A0A0C0",fontSize:22,cursor:"pointer",padding:"0 6px 0 0"},
+  iconBtn:   {background:"#1E1E35",border:"none",color:"#A0A0C0",borderRadius:10,padding:"8px 12px",fontSize:18,cursor:"pointer"},
+  addBtn:    {background:"linear-gradient(135deg,#1877F2,#A855F7)",border:"none",color:"#fff",borderRadius:10,padding:"8px 16px",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:"inherit"},
+  clearBtn:  {background:"none",border:"none",color:"#6060A0",fontSize:12,cursor:"pointer"},
   primaryBtn:{width:"100%",padding:"15px",border:"none",borderRadius:12,fontSize:16,fontWeight:700,cursor:"pointer",fontFamily:"inherit"},
   dangerBtn: {width:"100%",padding:"13px",background:"transparent",border:"1.5px solid #FF4444",borderRadius:12,color:"#FF4444",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:"inherit"},
   fieldLabel:{fontSize:13,color:"#8080A0",marginBottom:6},
-  qtyBtn:  {width:36,height:36,background:"#1E1E35",border:"1.5px solid #2E2E50",borderRadius:8,color:"#A0A0C0",fontSize:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"inherit"},
+  qtyBtn:    {width:36,height:36,background:"#1E1E35",border:"1.5px solid #2E2E50",borderRadius:8,color:"#A0A0C0",fontSize:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"inherit"},
 };
 
 const CSS = `
