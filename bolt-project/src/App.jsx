@@ -127,8 +127,10 @@ export default function App() {
     toast("💾 บันทึกสินค้าแล้ว");
   }
   async function saveRider(rider) {
-    await set(ref(db,`riders/${rider.id}`),rider);
-    toast(rider.isNew ? "✅ เพิ่มไรเดอร์แล้ว" : "✏️ แก้ไขไรเดอร์แล้ว");
+    const isNew = rider.isNew;
+    const {isNew: _, ...riderData} = rider;
+    await set(ref(db,`riders/${riderData.id}`), riderData);
+    toast(isNew ? "✅ เพิ่มไรเดอร์แล้ว" : "✏️ แก้ไขไรเดอร์แล้ว");
   }
   async function deleteRider(id) {
     await remove(ref(db,`riders/${id}`));
