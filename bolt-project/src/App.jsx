@@ -53,7 +53,7 @@ const REASON_PRESETS = {
   cancelled:["ลูกค้ายกเลิก","ของหมด","ที่อยู่ไม่ถูกต้อง","ชำระไม่ผ่าน","ลูกค้าไม่รับสาย"],
 };
 
-const genId = () => "#" + String(Math.floor(Math.random() * 90000) + 10000);
+const genId = () => "ORD" + String(Math.floor(Math.random() * 90000) + 10000);
 const fmt = iso => {
   const d = new Date(iso);
   return d.toLocaleDateString("th-TH",{day:"numeric",month:"short"}) + " " +
